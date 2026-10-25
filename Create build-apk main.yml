@@ -1,0 +1,87 @@
+
+name: Build Galaxy Browser APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get project files
+        uses: actions/checkout@v4
+
+      - name: Extract Android project
+        run: |
+          unzip -o GalaxyBrowser-Android.zip
+          test -f GalaxyBrowser-Android/app/build.gradle.kts
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/GalaxyBrowser-Android" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Fix Java and Kotlin target versions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("GalaxyBrowser-Android/app/build.gradle.kts")
+          s = p.read_text()
+
+          if "android {" not in s:
+              raise SystemExit("Could not find the Android configuration block.")
+
+          java_block = """
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          """
+
+          if "sourceCompatibility = JavaVersion.VERSION_17" not in s:
+              s = s.replace("android {", "android {\n" + java_block, 1)
+
+          kotlin_block = """
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          """
+
+          if re.search(r'jvmTarget\s*=', s):
+              s = re.sub(
+                  r'jvmTarget\s*=\s*["\\'][^"\\']+["\\']',
+                  'jvmTarget = "17"',
+                  s
+              )
+          elif "android {" in s:
+              s = s.replace("android {", "android {\n" + kotlin_block, 1)
+
+          p.write_text(s)
+          print("Updated Java and Kotlin JVM targets to 17.")
+          PY
+
+      - name: Compile Android app
+        run: gradle -p "$PROJECT_DIR" assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GalaxyBrowser-debug-apk
+          path: GalaxyBrowser-Android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
